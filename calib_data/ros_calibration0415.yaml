@@ -1,0 +1,68 @@
+%YAML:1.0
+---
+# OpenCV stereo calibration format
+image_width: 640
+image_height: 480
+image_size: [640, 480]
+
+[narrow_stereo/left]:
+camera_matrix: !!opencv-matrix
+  rows: 3
+  cols: 3
+  dt: d
+  data: [244.334474 0.000000 314.258506
+          0.000000 236.470562 244.845961
+          0.000000 0.000000 1.000000]
+
+distortion_coefficients: !!opencv-matrix
+  rows: 1
+  cols: 4
+  dt: d
+  data: [0.240506 -0.026459 -0.101088 0.034362]
+
+rectification: !!opencv-matrix
+  rows: 3
+  cols: 3
+  dt: d
+  data: [0.999837 0.015815 -0.008688
+        -0.015778 0.999866 0.004268
+        0.008755 -0.004130 0.999953]
+
+projection_matrix: !!opencv-matrix
+  rows: 3
+  cols: 4
+  dt: d
+  data: [247.045949 2.566082 312.120903 0.000000,
+         -1.587526 235.427640 245.843808 0.000000,
+         0.008755 -0.004130 0.999953 0.000000]
+
+[narrow_stereo/right]
+camera_matrix: !!opencv-matrix
+  rows: 3
+  cols: 3
+  dt: d
+  data: [244.731307 0.000000 329.183565
+          0.000000 236.865378 244.874824
+          0.000000 0.000000 1.000000]
+
+distortion_coefficients: !!opencv-matrix
+  rows: 1
+  cols: 4
+  dt: d
+  data: [0.239051 -0.019399 -0.115020 0.041863]
+
+rectification: !!opencv-matrix
+  rows: 3
+  cols: 3
+  dt: d
+  data: [0.999931 -0.001091 -0.011672
+          0.001042 0.999991 -0.004206
+          0.011677 0.004193 0.999923]
+
+projection_matrix: !!opencv-matrix
+  rows: 3
+  cols: 4
+  dt: d
+  data: [248.558299 1.113379 326.301647 -11.466724
+        3.106128 237.889974 243.859793 0.000000
+        0.011677 0.004193 0.999923 0.000000]
