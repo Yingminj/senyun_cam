@@ -22,7 +22,7 @@ except ImportError as exc:
     ) from exc
 
 
-VIEW_ORDER = ["left_eye", "right_eye", "right_hand", "left_hand"]
+VIEW_ORDER = ["left_eye", "right_eye"]
 CROP_HEIGHT = 480
 
 

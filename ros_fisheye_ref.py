@@ -67,7 +67,6 @@ def _parse_matrix_data(block_text: str, key: str, rows: int, cols: int) -> np.nd
 
 
 def _extract_camera_block(yaml_text: str, block_name: str) -> str:
-	# Supports both "[name]:" and "[name]" styles.
 	pattern = rf"\[{re.escape(block_name)}\]\s*:?(.*?)(?=\n\[[^\n]+\]\s*:?|\Z)"
 	match = re.search(pattern, yaml_text, re.DOTALL)
 	if not match:
@@ -94,24 +93,63 @@ def load_ros_stereo_yaml(yaml_path: Path) -> Dict[str, Dict[str, np.ndarray]]:
 	}
 
 
-def print_k_vs_p(stereo_params: Dict[str, Dict[str, np.ndarray]]) -> None:
-	print("\n=== Camera Matrix (K) vs Projection Matrix (P) Comparison ===")
-	for cam in ["left_eye", "right_eye"]:
-		k = stereo_params[cam]["K"]
-		p3 = stereo_params[cam]["P"][:, :3]
-		delta = p3 - k
+def recompute_fisheye_rectification(
+    stereo_params: Dict[str, Dict[str, np.ndarray]], 
+    image_size: Tuple[int, int],
+    balance: float = 0.0
+) -> None:
+	"""
+	从 ROS 的异常 P 和 R 矩阵中反推真实的物理外参 (R, T)，
+	并使用 OpenCV fisheye 模块强制重新计算标准正交的极线矫正矩阵。
+	"""
+	K1 = stereo_params["left_eye"]["K"]
+	D1 = stereo_params["left_eye"]["D"]
+	R1_ros = stereo_params["left_eye"]["R"]
+	P1_ros = stereo_params["left_eye"]["P"]
 
-		print(f"\n[{cam}]")
-		print("K =")
-		print(np.array2string(k, precision=6, suppress_small=False))
-		print("P[:,:3] =")
-		print(np.array2string(p3, precision=6, suppress_small=False))
-		print("P[:,:3] - K =")
-		print(np.array2string(delta, precision=6, suppress_small=False))
-		print(
-			"fx/fy/cx/cy delta = "
-			f"({delta[0,0]:+.6f}, {delta[1,1]:+.6f}, {delta[0,2]:+.6f}, {delta[1,2]:+.6f})"
-		)
+	K2 = stereo_params["right_eye"]["K"]
+	D2 = stereo_params["right_eye"]["D"]
+	R2_ros = stereo_params["right_eye"]["R"]
+	P2_ros = stereo_params["right_eye"]["P"]
+
+	# 1. 反推真实的双目外参 R (从左目到右目的旋转) 和 T (平移)
+	# 在畸变矫正模型中，R_orig = R2_ros.T * R1_ros
+	R_orig = R2_ros.T @ R1_ros
+	
+	# 从 P2_ros 中提取平移向量。P2 = M2 * [I | T_rect] -> T_rect = M2^-1 * P2[:, 3]
+	M2 = P2_ros[:, :3]
+	p24 = P2_ros[:, 3]
+	T_rect = np.linalg.inv(M2) @ p24
+	# T_orig = R2_ros.T * T_rect
+	T_orig = R2_ros.T @ T_rect
+
+	# 2. 强制调用标准的 Fisheye 极线矫正
+	# flags=cv2.CALIB_ZERO_DISPARITY 会强制左右相机的 f_x, f_y, c_y 完全相等，并消除 Y 方向视差
+	R1_new, R2_new, P1_new, P2_new, Q = cv2.fisheye.stereoRectify(
+		K1, D1, K2, D2,
+		image_size,
+		R_orig, T_orig,
+		flags=cv2.CALIB_ZERO_DISPARITY,
+		newImageSize=image_size,
+		balance=balance, # balance=0.0 保留全部有效像素但会裁剪较多；如果拉伸严重可适当调大到 0.5
+		fov_scale=1.0
+	)
+
+	# 3. 打印对比结果
+	print("\n=== [ROS 原始投影矩阵 P (有畸变/不对齐)] ===")
+	print("P1_ros:\n", np.array2string(P1_ros, precision=4, suppress_small=True))
+	print("P2_ros:\n", np.array2string(P2_ros, precision=4, suppress_small=True))
+
+	print("\n=== [修正后的标准投影矩阵 P_new (极线严格对齐)] ===")
+	print("P1_new:\n", np.array2string(P1_new, precision=4, suppress_small=True))
+	print("P2_new:\n", np.array2string(P2_new, precision=4, suppress_small=True))
+	print("\n提示：请将 P2_new 的 P[0,3] 值除以 P[0,0] (即 f_x)，验证基线是否与物理基线相符。")
+
+	# 4. 覆盖旧参数
+	stereo_params["left_eye"]["R"] = R1_new
+	stereo_params["left_eye"]["P"] = P1_new
+	stereo_params["right_eye"]["R"] = R2_new
+	stereo_params["right_eye"]["P"] = P2_new
 
 
 def build_fisheye_maps(
@@ -219,11 +257,12 @@ def build_parser() -> argparse.ArgumentParser:
 		)
 	)
 	parser.add_argument("--input-topic", default="/quad_tile/raw", help="ROS2 image topic")
-	parser.add_argument("--calib-yaml", default="calib_data/ros_calibration0415.yaml", help="Stereo calibration YAML")
+	parser.add_argument("--calib-yaml", default="calib_data/ros_calibration0416.yaml", help="Stereo calibration YAML")
 	parser.add_argument("--crop-width", type=int, default=640, help="Center crop width for each eye")
 	parser.add_argument("--crop-height", type=int, default=480, help="Center crop height for each eye")
 	parser.add_argument("--save-dir", default="undistort_output", help="Output directory")
 	parser.add_argument("--window", default="ros-fisheye-rectify", help="OpenCV preview window name")
+	parser.add_argument("--balance", type=float, default=0.0, help="Fisheye rectification balance (0.0=max crop, 1.0=no crop)")
 	return parser
 
 
@@ -238,9 +277,12 @@ def main() -> int:
 	save_root.mkdir(parents=True, exist_ok=True)
 
 	stereo_params = load_ros_stereo_yaml(yaml_path)
-	print_k_vs_p(stereo_params)
-
+	
 	map_size = (args.crop_width, args.crop_height)
+
+	# 核心改动：重新计算正确的 Fisheye 投影矩阵
+	recompute_fisheye_rectification(stereo_params, map_size, balance=args.balance)
+
 	undistort_maps = build_fisheye_maps(stereo_params, map_size)
 
 	rclpy.init()
@@ -277,11 +319,9 @@ def main() -> int:
 				cv2.imshow(args.window, last_preview)
 				last_frame_t = time.perf_counter()
 			else:
-				# Keep the last frame visible when topic is temporarily silent.
 				if last_preview is not None:
 					cv2.imshow(args.window, last_preview)
 
-				# Show a heartbeat in terminal every few seconds if no frame arrives.
 				if time.perf_counter() - last_frame_t > 5.0:
 					print("Waiting for frames from topic...", flush=True)
 					last_frame_t = time.perf_counter()
